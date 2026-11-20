@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Система оповещения</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #121212; color: #ffffff; padding: 16px; min-height: 100vh; }
+    .container { max-width: 480px; margin: 0 auto; }
+    .card { background: #1e1e1e; border-radius: 12px; padding: 18px; margin-bottom: 16px; border: 1px solid #2c2c2c; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    h2 { font-size: 16px; color: #bbbbbb; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    p { font-size: 14px; color: #cccccc; line-height: 1.4; }
+    .hidden { display: none !important; }
+
+    /* Баннер звука */
+    .sound-banner { background: #263238; border: 1px solid #455a64; }
+    .sound-banner.ready { background: #1b3320; border-color: #2e7d32; }
+
+    /* Кнопки */
+    button {
+      width: 100%; border: none; border-radius: 10px; padding: 16px;
+      font-size: 16px; font-weight: 700; color: #fff; cursor: pointer;
+      transition: opacity 0.15s; margin-top: 10px;
+    }
+    button:active { opacity: 0.8; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #0277bd; }
+    .btn-secondary { background: #37474f; font-size: 14px; padding: 12px; }
+    .btn-uav-alert { background: #e65100; font-size: 18px; padding: 20px; }
+    .btn-missile-alert { background: #b71c1c; font-size: 18px; padding: 20px; }
+    .btn-uav-clear { background: #2e7d32; margin-top: 18px; }
+    .btn-missile-clear { background: #1565c0; }
+    .btn-dark { background: #333333; }
+
+    /* Код авторизации */
+    .code-box {
+      background: #121212; border: 2px dashed #ffa726; border-radius: 10px;
+      font-size: 34px; font-weight: 800; text-align: center; letter-spacing: 4px;
+      padding: 18px; margin: 18px 0; color: #ffffff;
+    }
+    .status-ok { color: #4caf50; font-weight: 700; margin-top: 8px; font-size: 14px; }
+
+    /* Поля ввода админки */
+    label { display: block; font-size: 13px; color: #aaaaaa; margin-top: 12px; margin-bottom: 6px; }
+    input, select {
+      width: 100%; background: #121212; border: 1px solid #444; border-radius: 8px;
+      padding: 14px; font-size: 16px; color: #fff;
+    }
+
+    /* Полноэкранная тревога */
+    #alarmOverlay {
+      position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column;
+      justify-content: center; align-items: center; text-align: center; padding: 24px;
+    }
+    #alarmOverlay h1 { font-size: 32px; margin-bottom: 14px; }
+    #alarmOverlay p { font-size: 18px; color: #fff9c4; font-weight: 600; margin-bottom: 24px; }
+    #alarmSender { font-size: 15px; color: #ffffff; margin-bottom: 36px; }
+    #btnAckAlarm { background: #ffffff; color: #000000; font-size: 18px; padding: 22px; max-width: 400px; }
+
+    /* Модальное окно подтверждения */
+    #confirmModal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 9000;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .modal-box { background: #1e1e1e; border-radius: 12px; padding: 20px; width: 100%; max-width: 380px; border: 1px solid #444; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ОБЯЗАТЕЛЬНАЯ АКТИВАЦИЯ ЗВУКА В БРАУЗЕРЕ -->
+  <div id="soundBanner" class="card sound-banner">
+    <h1 id="soundTitle">Звук сирены отключён</h1>
+    <p id="soundDesc">Нажмите кнопку ниже, чтобы разрешить браузеру включать сирену и не гасить экран.</p>
+    <button id="btnUnlockAudio" class="btn-primary">ВКЛЮЧИТЬ ЗВУК И МОНИТОРИНГ</button>
+    <button id="btnTestSound" class="btn-secondary hidden">Проверить звук сирены (2 сек)</button>
+  </div>
+
+  <!-- ЭКРАН 1: ОЖИДАНИЕ АКТИВАЦИИ ПО КОДУ -->
+  <div id="viewWaiting" class="card hidden">
+    <h1 style="color:#ffa726;">Ожидание активации</h1>
+    <p>Передайте этот код администратору для получения позывного и доступа:</p>
+    <div id="authCodeDisplay" class="code-box">--- ---</div>
+    <p id="waitingStatus" style="text-align:center; color:#888;">Подключение к базе...</p>
+  </div>
+
+  <!-- ЭКРАН 2: РАБОЧИЙ ЭКРАН ПОЛЬЗОВАТЕЛЯ / ДЕЖУРНОГО -->
+  <div id="viewActive" class="hidden">
+    <div class="card">
+      <h1 id="callsignDisplay">Позывной: ---</h1>
+      <p id="roleDisplay">Роль: Пользователь</p>
+      <div id="connStatus" class="status-ok">● Мониторинг активен (держите вкладку открытой)</div>
+    </div>
+
+    <!-- ПУЛЬТ ДЕЖУРНОГО (ТОЛЬКО ДЛЯ ADMIN) -->
+    <div id="dutyPanel" class="card hidden">
+      <h2>Пульт дежурного</h2>
+      <button id="btnUavAlert" class="btn-uav-alert">УГРОЗА БПЛА</button>
+      <button id="btnMissileAlert" class="btn-missile-alert">РАКЕТНАЯ ОПАСНОСТЬ</button>
+      <button id="btnUavClear" class="btn-uav-clear">ОТБОЙ БПЛА</button>
+      <button id="btnMissileClear" class="btn-missile-clear">ОТБОЙ РАКЕТНОЙ ОПАСНОСТИ</button>
+      <button id="btnToggleAdmin" class="btn-dark" style="margin-top:22px;">Управление пользователями (ввести код)</button>
+    </div>
+
+    <!-- ПАНЕЛЬ АДМИНИСТРАТОРА -->
+    <div id="adminPanel" class="card hidden">
+      <h2>Активация нового устройства</h2>
+      <label for="inputCode">Код с экрана пользователя (6 символов)</label>
+      <input id="inputCode" type="text" maxlength="7" placeholder="Например: K7M-9P2" style="text-transform:uppercase;" />
+
+      <label for="inputCallsign">Позывной</label>
+      <input id="inputCallsign" type="text" placeholder="Например: Гранит-4" />
+
+      <label for="selectRole">Роль</label>
+      <select id="selectRole">
+        <option value="user">Пользователь (только приём сирены)</option>
+        <option value="admin">Администратор (кнопки тревоги + выдача прав)</option>
+      </select>
+
+      <button id="btnActivate" class="btn-uav-clear">Активировать и выдать позывной</button>
+    </div>
+  </div>
+</div>
+
+<!-- ПОЛНОЭКРАННОЕ ОКНО СИРЕНЫ -->
+<div id="alarmOverlay" class="hidden">
+  <h1 id="alarmTitle">РАКЕТНАЯ ОПАСНОСТЬ</h1>
+  <p id="alarmSubtitle">НЕМЕДЛЕННО ПРОЙДИТЕ В УКРЫТИЕ!</p>
+  <div id="alarmSender">Передал: Дежурный</div>
+  <button id="btnAckAlarm">ПРИНЯЛ / ОТКЛЮЧИТЬ ЗВУК</button>
+</div>
+
+<!-- МОДАЛЬНОЕ ОКНО ПОДТВЕРЖДЕНИЯ ОТПРАВКИ -->
+<div id="confirmModal" class="hidden">
+  <div class="modal-box">
+    <h1>Подтвердите отправку</h1>
+    <p id="confirmText" style="margin-top:8px;">Передать сигнал всем?</p>
+    <div class="modal-actions">
+      <button id="btnConfirmCancel" class="btn-dark">Отмена</button>
+      <button id="btnConfirmSend" class="btn-missile-alert" style="padding:14px; font-size:16px;">ОТПРАВИТЬ</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
+  import {
+    getFirestore, doc, getDoc, getDocFromServer, setDoc,
+    onSnapshot, serverTimestamp, writeBatch
+  } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAhSSi9NCAFaAAs_bUM_brWLtkzwLmMX-k",
+    authDomain: "firetrevoga.firebaseapp.com",
+    projectId: "firetrevoga",
+    storageBucket: "firetrevoga.firebasestorage.app",
+    messagingSenderId: "274034958723",
+    appId: "1:274034958723:web:a2c98daf999a22d0ffd6b6"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  // Безопасное локальное хранилище
+  const store = {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+    del: (k) => { try { localStorage.removeItem(k); } catch {} }
+  };
+
+  // --- СИНТЕЗАТОР СИРЕН (WEB AUDIO API) ---
+  let audioCtx = null;
+  let sirenTimer = null;
+  let activeNodes = [];
+  let wakeLock = null;
+
+  async function unlockAudioAndWakeLock() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+    }
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.001;
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+
+    if ("wakeLock" in navigator) {
+      try {
+        wakeLock = await navigator.wakeLock.request("screen");
+      } catch {}
+    }
+
+    const banner = document.getElementById("soundBanner");
+    banner.classList.add("ready");
+    document.getElementById("soundTitle").textContent = "Звук разрешён, экран активен";
+    document.getElementById("soundDesc").textContent = "Не закрывайте эту вкладку для мгновенного приёма тревоги.";
+    document.getElementById("btnUnlockAudio").classList.add("hidden");
+    document.getElementById("btnTestSound").classList.remove("hidden");
+  }
+
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "visible" && "wakeLock" in navigator) {
+      try { wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+    }
+  });
+
+  function stopSiren() {
+    if (sirenTimer) {
+      clearInterval(sirenTimer);
+      clearTimeout(sirenTimer);
+      sirenTimer = null;
+    }
+    activeNodes.forEach(n => { try { n.stop(); n.disconnect(); } catch {} });
+    activeNodes = [];
+  }
+
+  function playSiren(type) {
+    stopSiren();
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume().catch(() => {});
+    }
+
+    const now = audioCtx.currentTime;
+
+    if (type === "MISSILE_ALERT") {
+      const osc = audioCtx.createOscillator();
+      const filter = audioCtx.createBiquadFilter();
+      const gain = audioCtx.createGain();
+      osc.type = "sawtooth";
+      filter.type = "lowpass";
+      filter.frequency.value = 1400;
+      gain.gain.value = 0.85;
+
+      osc.connect(filter).connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      activeNodes.push(osc);
+
+      const sweep = () => {
+        const t = audioCtx.currentTime;
+        osc.frequency.cancelScheduledValues(t);
+        osc.frequency.setValueAtTime(340, t);
+        osc.frequency.linearRampToValueAtTime(780, t + 1.8);
+        osc.frequency.linearRampToValueAtTime(340, t + 3.6);
+      };
+      sweep();
+      sirenTimer = setInterval(sweep, 3600);
+
+    } else if (type === "UAV_ALERT") {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "square";
+      gain.gain.value = 0.55;
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now);
+      activeNodes.push(osc);
+
+      let high = true;
+      osc.frequency.setValueAtTime(880, now);
+      sirenTimer = setInterval(() => {
+        high = !high;
+        osc.frequency.setValueAtTime(high ? 880 : 560, audioCtx.currentTime);
+      }, 280);
+
+    } else if (type === "UAV_CLEAR" || type === "MISSILE_CLEAR") {
+      const osc1 = audioCtx.createOscillator();
+      const osc2 = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc1.type = "triangle";
+      osc2.type = "triangle";
+      osc1.frequency.setValueAtTime(440, now);
+      osc2.frequency.setValueAtTime(554.37, now);
+      gain.gain.setValueAtTime(0.6, now);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc1.start(now);
+      osc2.start(now);
+      activeNodes.push(osc1, osc2);
+
+      sirenTimer = setTimeout(() => stopSiren(), 5000);
+    }
+  }
+
+  document.getElementById("btnUnlockAudio").addEventListener("click", unlockAudioAndWakeLock);
+  document.getElementById("btnTestSound").addEventListener("click", () => {
+    playSiren("UAV_ALERT");
+    setTimeout(stopSiren, 2000);
+  });
+
+  // --- ЭКРАН ТРЕВОГИ ---
+  function showAlarmScreen(type, sender) {
+    const overlay = document.getElementById("alarmOverlay");
+    const title = document.getElementById("alarmTitle");
+    const sub = document.getElementById("alarmSubtitle");
+    document.getElementById("alarmSender").textContent = "Передал: " + sender;
+
+    if (type === "MISSILE_ALERT") {
+      overlay.style.background = "#b71c1c";
+      title.textContent = "РАКЕТНАЯ ОПАСНОСТЬ";
+      sub.textContent = "НЕМЕДЛЕННО ПРОЙДИТЕ В УКРЫТИЕ!";
+    } else if (type === "UAV_ALERT") {
+      overlay.style.background = "#e65100";
+      title.textContent = "УГРОЗА БПЛА";
+      sub.textContent = "ОТОЙДИТЕ ОТ ОКОН, УКРОЙТЕСЬ!";
+    } else if (type === "UAV_CLEAR") {
+      overlay.style.background = "#2e7d32";
+      title.textContent = "ОТБОЙ БПЛА";
+      sub.textContent = "Угроза атаки БПЛА миновала";
+    } else if (type === "MISSILE_CLEAR") {
+      overlay.style.background = "#1565c0";
+      title.textContent = "ОТБОЙ РАКЕТНОЙ ОПАСНОСТИ";
+      sub.textContent = "Ракетная опасность отменена";
+    }
+
+    overlay.classList.remove("hidden");
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 800]);
+    playSiren(type);
+  }
+
+  document.getElementById("btnAckAlarm").addEventListener("click", () => {
+    stopSiren();
+    document.getElementById("alarmOverlay").classList.add("hidden");
+  });
+
+  // --- ПОДПИСКА НА ТРЕВОГИ ---
+  let alertUnsub = null;
+  function startListeningAlerts() {
+    if (alertUnsub) return;
+    alertUnsub = onSnapshot(doc(db, "alerts", "current"), (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const ts = data.timestamp?.toMillis ? data.timestamp.toMillis() : null;
+      if (!ts) return;
+
+      const lastTs = Number(store.get("last_handled_ts") || "0");
+      const now = Date.now();
+      if (ts <= lastTs || (now - ts) > 300000) return;
+
+      store.set("last_handled_ts", String(ts));
+      showAlarmScreen(data.type, data.sender || "Дежурный");
+    });
+  }
+
+  // --- АВТОРИЗАЦИЯ И ПРОФИЛЬ ---
+  function generateCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let res = "";
+    for (let i = 0; i < 6; i++) res += chars[Math.floor(Math.random() * chars.length)];
+    return res;
+  }
+
+  function renderActiveUser(callsign, role) {
+    document.getElementById("viewWaiting").classList.add("hidden");
+    document.getElementById("viewActive").classList.remove("hidden");
+    document.getElementById("callsignDisplay").textContent = "Позывной: " + callsign;
+    const isAdmin = role === "admin";
+    document.getElementById("roleDisplay").textContent = isAdmin ? "Роль: Администратор (Дежурный)" : "Роль: Пользователь";
+    document.getElementById("dutyPanel").classList.toggle("hidden", !isAdmin);
+    startListeningAlerts();
+  }
+
+  async function renderWaitingUser(uid) {
+    document.getElementById("viewActive").classList.add("hidden");
+    document.getElementById("viewWaiting").classList.remove("hidden");
+
+    let code = store.get("pending_code");
+    if (!code || code.length !== 6) {
+      code = generateCode();
+      store.set("pending_code", code);
+    }
+    document.getElementById("authCodeDisplay").textContent = code.slice(0, 3) + "-" + code.slice(3, 6);
+
+    try {
+      const codeRef = doc(db, "pending_codes", code);
+      const existing = await getDoc(codeRef);
+      if (!existing.exists()) {
+        await setDoc(codeRef, { uid, createdAt: serverTimestamp() });
+      }
+      document.getElementById("waitingStatus").textContent = "Ожидание подтверждения администратором...";
+    } catch (e) {
+      document.getElementById("waitingStatus").textContent = "Ошибка связи с базой: " + e.message;
+    }
+  }
+
+  onAuthStateChanged(auth, (user) => {
+    if (!user) {
+      signInAnonymously(auth).catch((e) => {
+        document.getElementById("viewWaiting").classList.remove("hidden");
+        document.getElementById("waitingStatus").textContent = "Ошибка входа: " + e.message;
+      });
+      return;
+    }
+
+    const cachedCallsign = store.get("callsign");
+    const cachedRole = store.get("role");
+    if (cachedCallsign && cachedRole) {
+      renderActiveUser(cachedCallsign, cachedRole);
+    }
+
+    onSnapshot(doc(db, "users", user.uid), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        const callsign = d.callsign || "Боец";
+        const role = d.role || "user";
+        store.set("callsign", callsign);
+        store.set("role", role);
+        renderActiveUser(callsign, role);
+      } else {
+        store.del("callsign");
+        store.del("role");
+        renderWaitingUser(user.uid);
+      }
+    });
+  });
+
+  // --- ОТПРАВКА СИГНАЛА ДЕЖУРНЫМ ---
+  let pendingAlertType = null;
+  function askSendAlert(type, label) {
+    pendingAlertType = type;
+    document.getElementById("confirmText").textContent = `Передать всем сигнал «${label}»?`;
+    document.getElementById("confirmModal").classList.remove("hidden");
+  }
+
+  document.getElementById("btnConfirmCancel").addEventListener("click", () => {
+    pendingAlertType = null;
+    document.getElementById("confirmModal").classList.add("hidden");
+  });
+
+  document.getElementById("btnConfirmSend").addEventListener("click", async () => {
+    if (!pendingAlertType) return;
+    const typeToSend = pendingAlertType;
+    pendingAlertType = null;
+    document.getElementById("confirmModal").classList.add("hidden");
+
+    const sender = store.get("callsign") || "Дежурный";
+    try {
+      await setDoc(doc(db, "alerts", "current"), {
+        type: typeToSend,
+        sender,
+        timestamp: serverTimestamp()
+      });
+    } catch (e) {
+      alert("Ошибка отправки: " + e.message);
+    }
+  });
+
+  document.getElementById("btnUavAlert").addEventListener("click", () => askSendAlert("UAV_ALERT", "УГРОЗА БПЛА"));
+  document.getElementById("btnMissileAlert").addEventListener("click", () => askSendAlert("MISSILE_ALERT", "РАКЕТНАЯ ОПАСНОСТЬ"));
+  document.getElementById("btnUavClear").addEventListener("click", () => askSendAlert("UAV_CLEAR", "ОТБОЙ БПЛА"));
+  document.getElementById("btnMissileClear").addEventListener("click", () => askSendAlert("MISSILE_CLEAR", "ОТБОЙ РАКЕТНОЙ ОПАСНОСТИ"));
+
+  // --- АДМИНКА ---
+  document.getElementById("btnToggleAdmin").addEventListener("click", () => {
+    document.getElementById("adminPanel").classList.toggle("hidden");
+  });
+
+  document.getElementById("btnActivate").addEventListener("click", async () => {
+    const rawCode = document.getElementById("inputCode").value.toUpperCase().replace(/[-\s]/g, "").trim();
+    const callsign = document.getElementById("inputCallsign").value.trim();
+    const role = document.getElementById("selectRole").value;
+    const btn = document.getElementById("btnActivate");
+
+    if (rawCode.length !== 6) return alert("Введите 6-значный код");
+    if (!callsign) return alert("Укажите позывной");
+
+    btn.disabled = true;
+    try {
+      const codeRef = doc(db, "pending_codes", rawCode);
+      const snap = await getDocFromServer(codeRef);
+      if (!snap.exists() || !snap.data().uid) {
+        alert("Код не найден или уже использован");
+        btn.disabled = false;
+        return;
+      }
+
+      const targetUid = snap.data().uid;
+      const batch = writeBatch(db);
+      batch.set(doc(db, "users", targetUid), {
+        callsign,
+        role,
+        activatedAt: serverTimestamp()
+      });
+      batch.delete(codeRef);
+      await batch.commit();
+
+      document.getElementById("inputCode").value = "";
+      document.getElementById("inputCallsign").value = "";
+      alert(`Активирован: ${callsign} (${role})`);
+    } catch (e) {
+      alert("Ошибка: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
