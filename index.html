@@ -33,6 +33,7 @@
     .btn-uav-clear { background: #2e7d32; margin-top: 18px; }
     .btn-missile-clear { background: #1565c0; }
     .btn-dark { background: #333333; }
+    .btn-danger { background: #b71c1c; }
 
     /* Код авторизации */
     .code-box {
@@ -49,6 +50,22 @@
       padding: 14px; font-size: 16px; color: #fff;
     }
 
+    /* Список пользователей в админке */
+    .divider { height: 1px; background: #333; margin: 22px 0; }
+    .user-item {
+      background: #141414; border: 1px solid #333; border-radius: 10px;
+      padding: 14px; margin-top: 10px;
+    }
+    .user-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .user-name { font-size: 16px; font-weight: 700; color: #fff; }
+    .badge {
+      font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px;
+      background: #2c2c2c; color: #cccccc; white-space: nowrap;
+    }
+    .badge.admin { background: #4a2c00; color: #ffb74d; border: 1px solid #ffa726; }
+    .user-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .user-actions button { margin-top: 0; padding: 10px; font-size: 14px; }
+
     /* Полноэкранная тревога */
     #alarmOverlay {
       position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column;
@@ -59,9 +76,9 @@
     #alarmSender { font-size: 15px; color: #ffffff; margin-bottom: 36px; }
     #btnAckAlarm { background: #ffffff; color: #000000; font-size: 18px; padding: 22px; max-width: 400px; }
 
-    /* Модальное окно подтверждения */
-    #confirmModal {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 9000;
+    /* Модальные окна */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.82); z-index: 9000;
       display: flex; align-items: center; justify-content: center; padding: 20px;
     }
     .modal-box { background: #1e1e1e; border-radius: 12px; padding: 20px; width: 100%; max-width: 380px; border: 1px solid #444; }
@@ -102,7 +119,7 @@
       <button id="btnMissileAlert" class="btn-missile-alert">РАКЕТНАЯ ОПАСНОСТЬ</button>
       <button id="btnUavClear" class="btn-uav-clear">ОТБОЙ БПЛА</button>
       <button id="btnMissileClear" class="btn-missile-clear">ОТБОЙ РАКЕТНОЙ ОПАСНОСТИ</button>
-      <button id="btnToggleAdmin" class="btn-dark" style="margin-top:22px;">Управление пользователями (ввести код)</button>
+      <button id="btnToggleAdmin" class="btn-dark" style="margin-top:22px;">Управление пользователями</button>
     </div>
 
     <!-- ПАНЕЛЬ АДМИНИСТРАТОРА -->
@@ -121,6 +138,15 @@
       </select>
 
       <button id="btnActivate" class="btn-uav-clear">Активировать и выдать позывной</button>
+
+      <div class="divider"></div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h2 style="margin-bottom:0;">Активные пользователи</h2>
+        <button id="btnRefreshUsers" class="btn-secondary" style="width:auto; margin-top:0; padding:8px 12px;">Обновить</button>
+      </div>
+      <p id="usersListStatus" style="margin-top:10px; color:#888;">Нажмите «Обновить» для загрузки списка</p>
+      <div id="usersList"></div>
     </div>
   </div>
 </div>
@@ -133,8 +159,8 @@
   <button id="btnAckAlarm">ПРИНЯЛ / ОТКЛЮЧИТЬ ЗВУК</button>
 </div>
 
-<!-- МОДАЛЬНОЕ ОКНО ПОДТВЕРЖДЕНИЯ ОТПРАВКИ -->
-<div id="confirmModal" class="hidden">
+<!-- МОДАЛЬНОЕ ОКНО ПОДТВЕРЖДЕНИЯ ОТПРАВКИ СИГНАЛА -->
+<div id="confirmModal" class="modal-backdrop hidden">
   <div class="modal-box">
     <h1>Подтвердите отправку</h1>
     <p id="confirmText" style="margin-top:8px;">Передать сигнал всем?</p>
@@ -145,12 +171,32 @@
   </div>
 </div>
 
+<!-- МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ПОЛЬЗОВАТЕЛЯ -->
+<div id="editUserModal" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <h1>Изменить пользователя</h1>
+    <label for="editCallsign">Позывной</label>
+    <input id="editCallsign" type="text" placeholder="Позывной" />
+
+    <label for="editRole">Роль</label>
+    <select id="editRole">
+      <option value="user">Пользователь</option>
+      <option value="admin">Администратор</option>
+    </select>
+
+    <div class="modal-actions">
+      <button id="btnEditCancel" class="btn-dark">Отмена</button>
+      <button id="btnEditSave" class="btn-primary">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
   import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
   import {
-    getFirestore, doc, getDoc, getDocFromServer, setDoc,
-    onSnapshot, serverTimestamp, writeBatch
+    getFirestore, collection, doc, getDoc, getDocFromServer, getDocsFromServer,
+    setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, writeBatch
   } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -369,6 +415,9 @@
     const isAdmin = role === "admin";
     document.getElementById("roleDisplay").textContent = isAdmin ? "Роль: Администратор (Дежурный)" : "Роль: Пользователь";
     document.getElementById("dutyPanel").classList.toggle("hidden", !isAdmin);
+    if (!isAdmin) {
+      document.getElementById("adminPanel").classList.add("hidden");
+    }
     startListeningAlerts();
   }
 
@@ -462,9 +511,13 @@
   document.getElementById("btnUavClear").addEventListener("click", () => askSendAlert("UAV_CLEAR", "ОТБОЙ БПЛА"));
   document.getElementById("btnMissileClear").addEventListener("click", () => askSendAlert("MISSILE_CLEAR", "ОТБОЙ РАКЕТНОЙ ОПАСНОСТИ"));
 
-  // --- АДМИНКА ---
+  // --- АДМИНКА: АКТИВАЦИЯ ПО КОДУ ---
   document.getElementById("btnToggleAdmin").addEventListener("click", () => {
-    document.getElementById("adminPanel").classList.toggle("hidden");
+    const panel = document.getElementById("adminPanel");
+    panel.classList.toggle("hidden");
+    if (!panel.classList.contains("hidden")) {
+      loadUsersList();
+    }
   });
 
   document.getElementById("btnActivate").addEventListener("click", async () => {
@@ -498,13 +551,139 @@
 
       document.getElementById("inputCode").value = "";
       document.getElementById("inputCallsign").value = "";
-      alert(`Активирован: ${callsign} (${role})`);
+      alert(`Активирован: ${callsign}`);
+      loadUsersList();
     } catch (e) {
       alert("Ошибка: " + e.message);
     } finally {
       btn.disabled = false;
     }
   });
+
+  // --- АДМИНКА: СПИСОК, РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ПОЛЬЗОВАТЕЛЕЙ ---
+  let editingUserId = null;
+
+  async function loadUsersList() {
+    const statusEl = document.getElementById("usersListStatus");
+    const listEl = document.getElementById("usersList");
+    statusEl.textContent = "Загрузка списка...";
+    listEl.innerHTML = "";
+
+    try {
+      const snap = await getDocsFromServer(collection(db, "users"));
+      const users = [];
+      snap.forEach((d) => users.push({ id: d.id, ...d.data() }));
+
+      if (users.length === 0) {
+        statusEl.textContent = "Пользователей пока нет.";
+        return;
+      }
+
+      // Сортируем: сначала администраторы, затем по алфавиту
+      users.sort((a, b) => {
+        if (a.role !== b.role) return a.role === "admin" ? -1 : 1;
+        return (a.callsign || "").localeCompare(b.callsign || "", "ru");
+      });
+
+      statusEl.textContent = `Всего в системе: ${users.length}`;
+      const myUid = auth.currentUser?.uid;
+
+      users.forEach((u) => {
+        const isMe = u.id === myUid;
+        const isAdm = u.role === "admin";
+
+        const item = document.createElement("div");
+        item.className = "user-item";
+
+        const header = document.createElement("div");
+        header.className = "user-header";
+
+        const nameEl = document.createElement("div");
+        nameEl.className = "user-name";
+        nameEl.textContent = (u.callsign || "Без позывного") + (isMe ? " (Вы)" : "");
+
+        const badge = document.createElement("span");
+        badge.className = "badge" + (isAdm ? " admin" : "");
+        badge.textContent = isAdm ? "Админ" : "Пользователь";
+
+        header.appendChild(nameEl);
+        header.appendChild(badge);
+        item.appendChild(header);
+
+        const actions = document.createElement("div");
+        actions.className = "user-actions";
+
+        const btnEdit = document.createElement("button");
+        btnEdit.className = "btn-secondary";
+        btnEdit.textContent = "Изменить";
+        btnEdit.addEventListener("click", () => openEditModal(u));
+        actions.appendChild(btnEdit);
+
+        if (!isMe) {
+          const btnDel = document.createElement("button");
+          btnDel.className = "btn-danger";
+          btnDel.textContent = "Удалить";
+          btnDel.addEventListener("click", () => deleteUserAccount(u));
+          actions.appendChild(btnDel);
+        }
+
+        item.appendChild(actions);
+        listEl.appendChild(item);
+      });
+    } catch (e) {
+      statusEl.textContent = "Ошибка загрузки: " + e.message;
+    }
+  }
+
+  function openEditModal(userObj) {
+    editingUserId = userObj.id;
+    document.getElementById("editCallsign").value = userObj.callsign || "";
+    document.getElementById("editRole").value = userObj.role === "admin" ? "admin" : "user";
+    document.getElementById("editUserModal").classList.remove("hidden");
+  }
+
+  document.getElementById("btnEditCancel").addEventListener("click", () => {
+    editingUserId = null;
+    document.getElementById("editUserModal").classList.add("hidden");
+  });
+
+  document.getElementById("btnEditSave").addEventListener("click", async () => {
+    if (!editingUserId) return;
+    const newCallsign = document.getElementById("editCallsign").value.trim();
+    const newRole = document.getElementById("editRole").value;
+    if (!newCallsign) return alert("Введите позывной");
+
+    const btn = document.getElementById("btnEditSave");
+    btn.disabled = true;
+    try {
+      await updateDoc(doc(db, "users", editingUserId), {
+        callsign: newCallsign,
+        role: newRole
+      });
+      editingUserId = null;
+      document.getElementById("editUserModal").classList.add("hidden");
+      loadUsersList();
+    } catch (e) {
+      alert("Ошибка сохранения: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function deleteUserAccount(userObj) {
+    const name = userObj.callsign || userObj.id;
+    if (!confirm(`Удалить пользователя «${name}»?\nДоступ к системе оповещения для него сразу закроется.`)) {
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, "users", userObj.id));
+      loadUsersList();
+    } catch (e) {
+      alert("Ошибка удаления: " + e.message);
+    }
+  }
+
+  document.getElementById("btnRefreshUsers").addEventListener("click", loadUsersList);
 </script>
 </body>
 </html>
